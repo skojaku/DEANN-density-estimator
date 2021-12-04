@@ -7,7 +7,7 @@ import numba
 
 class DEANN:
     def __init__(
-        self, k=20, m=30, metric="euclidean", bandwidth=None, exact=True, gpu_id=None
+        self, k=20, m=50, metric="cosine", bandwidth=None, exact=False, gpu_id=None
     ):
         self.k = k
         self.m = m
