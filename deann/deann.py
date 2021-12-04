@@ -3,6 +3,7 @@ import numpy as np
 from scipy import sparse
 import faiss
 import numba
+from tqdm import tqdm
 
 
 class DEANN:
@@ -33,10 +34,11 @@ class DEANN:
         X = self._homogenize(X)
         self.n_indexed_samples = X.shape[0]
         self._make_faiss_index(X)
+        self.k = int(np.minimum(self.n_indexed_samples, self.k))
 
         if self.bandwidth is None:
             self.bandwidth = self._estimate_bandwidth(X)
-        self.precomputed_density = np.sort(self.log_density(X))
+        self.precomputed_density = np.sort(self.log_density(X, is_train_data=True))
         return self
 
     def percentile(self, X):
@@ -54,8 +56,8 @@ class DEANN:
             self.precomputed_density
         )
 
-    def log_density(self, X):
-        """ Calculate the log density of the data
+    def log_density(self, X, is_train_data=False):
+        """Calculate the log density of the data
 
         :param X: data to predict
         :type X: numpy.ndarray
@@ -67,21 +69,28 @@ class DEANN:
 
         denom = np.power(2 * np.pi * self.bandwidth ** 2, self.n_features / 2)
 
-        A = self._make_knn_graph(X, self.k, exclude_selfloop=False)
+        A = self._make_knn_graph(
+            X, k=self.k + 1 if is_train_data else self.k, exclude_selfloop=is_train_data
+        )
 
         # Calculate Z1
         A.data = np.exp(-A.data ** 2 / (2 * self.bandwidth ** 2))  #
         Z1 = np.array(A.sum(axis=1)).reshape(-1)
 
         # Calculate Z2
-        dist = calc_distance_to_non_neighbors(
-            X, A, num_samples=self.m, metric=self.metric
-        )
-        dist = np.exp(-(dist ** 2) / (2 * self.bandwidth ** 2))
-        Z2 = np.array(np.sum(dist, axis=1)).reshape(-1)
+        if self.k == self.n_samples:
+            Z2 = np.zeros(X.shape[0])
+        else:
+            dist = calc_distance_to_non_neighbors(
+                X, self.X, A, num_samples=self.m, metric=self.metric
+            )
+            dist = np.exp(-(dist ** 2) / (2 * self.bandwidth ** 2))
+            Z2 = np.array(np.sum(dist, axis=1)).reshape(-1)
 
-        density = Z1 * self.k + Z2 * (self.n_samples - self.k) / self.m
-        log_density = np.log(density + 1e-64) - np.log(self.n_samples) - np.log(denom)
+        density = Z1 + Z2 * (self.n_samples - self.k) / self.m
+        log_density = (
+            np.log(np.maximum(density, 1e-64)) - np.log(self.n_samples) - np.log(denom)
+        )
         return log_density
 
     def _estimate_bandwidth(self, X):
@@ -97,7 +106,8 @@ class DEANN:
 
         if self.metric == "cosine":
             d = 1 - d
-        dh = np.median(np.array(d[:, 1]).reshape(-1))
+        dh = np.maximum(np.quantile(np.array(d[:, 1]).reshape(-1), 0.95), 1e-12)
+        # dh = np.maximum(np.median(np.array(d[:, 1]).reshape(-1)), 1e-12)
         return dh
 
     def _make_faiss_index(self, X):
@@ -148,6 +158,7 @@ class DEANN:
 
         index.add(X)
         self.index = index
+        self.X = X
 
     def _make_knn_graph(self, X, k, exclude_selfloop=True):
         """Construct the k-nearest neighbor graph
@@ -208,17 +219,19 @@ class DEANN:
             return X
 
 
-def calc_distance_to_non_neighbors(X, A, num_samples, metric):
-    indices = _random_sample_non_neighbors(A.indptr, A.indices, A.shape[0], num_samples)
+def calc_distance_to_non_neighbors(X, Xref, A, num_samples, metric):
+    indices = _random_sample_non_neighbors(
+        A.indptr, A.indices, A.shape[0], A.shape[1], num_samples
+    )
 
     dist = np.zeros(indices.shape)
     if metric == "euclidean":
         for k in range(indices.shape[1]):
-            dist[:, k] = np.linalg.norm(X - X[indices[:, k]], axis=1)
+            dist[:, k] = np.linalg.norm(X - Xref[indices[:, k]], axis=1)
     elif metric == "cosine":
         # nX = np.einsum("ij,i->ij", X, 1 / np.linalg.norm(X, axis=1))
         for k in range(indices.shape[1]):
-            dist[:, k] = np.sum(X * X[indices[:, k], :], axis=1)
+            dist[:, k] = np.sum(X * Xref[indices[:, k], :], axis=1)
         dist = 1 - dist
     else:
         raise ValueError("Metric {} not implemented".format(metric))
@@ -231,13 +244,13 @@ def _isin_sorted(a, x):
 
 
 @numba.njit(nogil=True)
-def _random_sample_non_neighbors(A_indptr, A_indices, sz, num_samples):
-    retval = -np.ones((sz, num_samples), dtype=np.int64)
-    for i in range(sz):
+def _random_sample_non_neighbors(A_indptr, A_indices, nrows, ncols, num_samples):
+    retval = -np.ones((nrows, num_samples), dtype=np.int64)
+    for i in range(nrows):
         nei = A_indices[A_indptr[i] : A_indptr[i + 1]]
         sampled = 0
         while sampled < num_samples:
-            r = np.random.randint(0, sz)
+            r = np.random.randint(0, ncols)
             if not _isin_sorted(nei, r):
                 retval[i, sampled] = r
                 sampled += 1
