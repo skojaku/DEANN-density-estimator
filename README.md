@@ -1,4 +1,4 @@
-# A Python Package for a fast kernel density estimator using DEANN
+# A Python package for a fast kernel density estimator using DEANN
 
 This package is an implementation of DEANN algorithm. Please cite the following paper if you use this package (and if you find this package useful, give me a star!):
 
@@ -28,7 +28,6 @@ percentile = model.percentile(X) # Percentile
 - `bandwidth`: Bandwidth of the kernel function. Set `bandwidth=None` will set the bandwidth based on a common hueristics. See the code for detail.
 - `exact`: `exact=False` will use approximated nearest neighbor algorithms.
 - `gpu_id`: ID of the GPU device. If `gpu_id=None`, CPUs will be used.
-
 
 
 
