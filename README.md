@@ -22,8 +22,8 @@ model.fit(X) # Fit the kernel density estimator
 log_density = model.log_density(X) # Log density
 percentile = model.percentile(X) # Percentile
 ```
-- `k`: Number of the nearest data points. A large `k` improves the accuracy at expense of computation time.
-- `m`: Number of randomly sampled data points. A large `m` improves the accuracy at expense of computation time.
+- `k`: Number of the nearest data points. A large `k` improves the accuracy at the expense of computation time.
+- `m`: Number of randomly sampled data points. A large `m` improves the accuracy at the expense of computation time.
 - `metric`: Distance metrics. Set `euclidean` or `cosine`.
 - `bandwidth`: Bandwidth of the kernel function. Set `bandwidth=None` will set the bandwidth based on a common hueristics. See the code for detail.
 - `exact`: `exact=False` will use approximated nearest neighbor algorithms.
