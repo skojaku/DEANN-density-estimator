@@ -3,7 +3,7 @@
 This package is an implementation of DEANN algorithm. Please cite the following paper if you use this package (and if you find this package useful, give me a star!):
 
 ```
-Matti Karppa, Martin Aumüller, Rasmus Pagh. "DEANN: Speeding up Kernel-Density Estimation using Approximate Nearest Neighbor Search", arXiv, 2021
+Karppa, Matti, Martin Aumüller, and Rasmus Pagh. "DEANN: Speeding up Kernel-Density Estimation using Approximate Nearest Neighbor Search." arXiv preprint arXiv:2107.02736 (2021).
 ```
 
 # Install
