@@ -56,6 +56,51 @@ class DEANN:
             self.precomputed_density
         )
 
+    def gradient(self, X, is_train_data=False):
+        """Calculate the log density of the data
+
+        :param X: data to predict
+        :type X: numpy.ndarray
+        :return: predicted class labels
+        :rtype: numpy.ndarray
+        """
+        if self.metric != "cosine":
+            raise NotImplementedError("Only cosine metric is supported")
+
+        X = self._homogenize(X)
+
+        A = self._make_knn_graph(
+            X, k=self.k + 1 if is_train_data else self.k, exclude_selfloop=is_train_data
+        )
+
+        # Calculate Z1
+        A.data = np.exp(-A.data ** 2 / (2 * self.bandwidth ** 2))
+        grad1 = A @ self.X
+
+        # Calculate Z2
+        if self.k == self.n_samples:
+            grad2 = np.zeros_like(X)
+        else:
+            dist, indices = calc_distance_to_non_neighbors(
+                X, self.X, A, num_samples=self.m, metric=self.metric
+            )
+            rows = (
+                np.arange(X.shape[0]).reshape((X.shape[0], 1))
+                @ np.ones((1, indices.shape[1]))
+            ).reshape(-1)
+            dist, indices = dist.reshape(-1), indices.reshape(-1)
+
+            B = sparse.csr_matrix(
+                (dist, (rows, indices)), shape=(X.shape[0], self.X.shape[0])
+            )
+
+            B.data = np.exp(-B.data ** 2 / (2 * self.bandwidth ** 2))
+            grad2 = B @ self.X
+        grad = grad1 + grad2 * (self.n_samples - self.k) / self.m
+
+        grad = np.einsum("ij,i->ij", -grad, 1 / np.linalg.norm(grad, axis=1))
+        return grad
+
     def log_density(self, X, is_train_data=False):
         """Calculate the log density of the data
 
@@ -81,7 +126,7 @@ class DEANN:
         if self.k == self.n_samples:
             Z2 = np.zeros(X.shape[0])
         else:
-            dist = calc_distance_to_non_neighbors(
+            dist, indices = calc_distance_to_non_neighbors(
                 X, self.X, A, num_samples=self.m, metric=self.metric
             )
             dist = np.exp(-(dist ** 2) / (2 * self.bandwidth ** 2))
@@ -193,7 +238,8 @@ class DEANN:
         rows, indices, dist = rows[s], indices[s], dist[s]
 
         A = sparse.csr_matrix(
-            (dist, (rows, indices)), shape=(n_samples, self.n_indexed_samples),
+            (dist, (rows, indices)),
+            shape=(n_samples, self.n_indexed_samples),
         )
         return A
 
@@ -235,7 +281,7 @@ def calc_distance_to_non_neighbors(X, Xref, A, num_samples, metric):
         dist = 1 - dist
     else:
         raise ValueError("Metric {} not implemented".format(metric))
-    return dist
+    return dist, indices
 
 
 @numba.njit(nogil=True)
