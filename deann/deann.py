@@ -4,11 +4,14 @@ from scipy import sparse
 import faiss
 import numba
 from tqdm import tqdm
+from .adam import ADAM
+from sklearn.cluster import MiniBatchKMeans
+from scipy.sparse.csgraph import connected_components
 
 
 class DEANN:
     def __init__(
-        self, k=20, m=50, metric="cosine", bandwidth=None, exact=False, gpu_id=None
+        self, k=20, m=10, metric="cosine", bandwidth=None, exact=False, gpu_id=None
     ):
         self.k = k
         self.m = m
@@ -74,8 +77,8 @@ class DEANN:
         )
 
         # Calculate Z1
-        A.data = np.exp(-A.data ** 2 / (2 * self.bandwidth ** 2))
-        grad1 = A @ self.X
+        A.data = A.data * np.exp(-A.data ** 2 / (2 * self.bandwidth ** 2))
+        grad1 = -A @ self.X
 
         # Calculate Z2
         if self.k == self.n_samples:
@@ -94,8 +97,8 @@ class DEANN:
                 (dist, (rows, indices)), shape=(X.shape[0], self.X.shape[0])
             )
 
-            B.data = np.exp(-B.data ** 2 / (2 * self.bandwidth ** 2))
-            grad2 = B @ self.X
+            B.data = B.data * np.exp(-B.data ** 2 / (2 * self.bandwidth ** 2))
+            grad2 = -B @ self.X
         grad = grad1 + grad2 * (self.n_samples - self.k) / self.m
 
         grad = np.einsum("ij,i->ij", -grad, 1 / np.linalg.norm(grad, axis=1))
@@ -200,7 +203,6 @@ class DEANN:
                 np.random.choice(X.shape[0], train_sample_num, replace=False), :
             ].copy(order="C")
             index.train(Xtrain)
-
         index.add(X)
         self.index = index
         self.X = X
@@ -245,7 +247,9 @@ class DEANN:
 
     def _homogenize(self, X, Y=None):
         if self.metric == "cosine":
-            X = np.einsum("ij,i->ij", X, 1 / np.linalg.norm(X, axis=1))
+            X = np.einsum(
+                "ij,i->ij", X, 1 / np.maximum(np.linalg.norm(X, axis=1), 1e-12)
+            )
         X = X.astype("float32")
 
         if X.flags["C_CONTIGUOUS"]:
@@ -263,6 +267,58 @@ class DEANN:
             return X, Y
         else:
             return X
+
+    def grad_ascent(
+        self,
+        initial_cluster_size=100,
+        min_dist=0.1,
+        tol=1e-4,
+        eta=1e-4,
+        max_iter=100,
+    ):
+        """
+        Mean-Shift Algorithm
+        """
+        n, d = self.X.shape
+        K = np.minimum(initial_cluster_size, n)
+        kmeans = MiniBatchKMeans(n_clusters=K, random_state=0)
+        kmeans.fit(self.X)
+        xt = kmeans.cluster_centers_
+        # ids = np.random.choice(self.X.shape[0], K, replace=False)
+        # xt = self.X[ids, :].copy().astype("float32")
+        optimizer = ADAM()
+        optimizer.eta = eta
+        pbar = tqdm(range(max_iter))
+        for i in pbar:
+            dx = self.gradient(xt, is_train_data=False)
+            xnew = optimizer.update(xt, dx, lasso_penalty=0)
+
+            # Early stop
+            if np.linalg.norm(xnew - xt) / np.linalg.norm(xt) < tol:
+                xt = xnew
+                break
+            if i % 10 == 0:
+                p = self.percentile(xt)
+                p = np.mean(p)
+                pbar.set_description(f"Ascending - average percentile={p:.2f}")
+            xt = xnew.copy()
+
+        # Merge very close cluster centers
+        # The center of the mergerd cluster will be that with the highest density
+        assert self.metric == "cosine"  # euclidean not implemented
+        xemb = np.einsum("ij,i->ij", xt, 1 / np.linalg.norm(xt, axis=1))
+        D = 1 - xemb @ xemb.T
+        n_components, labels = connected_components(
+            csgraph=sparse.csr_matrix(D <= min_dist), directed=False, return_labels=True
+        )
+        density = self.log_density(xt)
+        merged_xt = []
+        for i in range(n_components):
+            clus_ids = np.where(i == labels)[0]
+            i_max = np.argmax(density[clus_ids])
+            merged_xt.append(xt[clus_ids[i_max], :])
+        xt = np.vstack(merged_xt)
+        return xt
 
 
 def calc_distance_to_non_neighbors(X, Xref, A, num_samples, metric):
