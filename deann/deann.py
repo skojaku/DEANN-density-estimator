@@ -275,10 +275,15 @@ class DEANN:
         tol=1e-4,
         eta=1e-4,
         max_iter=100,
+        k=None,
+        use_kde_grad=True,
     ):
         """
         Mean-Shift Algorithm
         """
+        if k is None:
+            k = self.k
+
         n, d = self.X.shape
         K = np.minimum(initial_cluster_size, n)
         kmeans = MiniBatchKMeans(n_clusters=K, random_state=0)
@@ -290,8 +295,17 @@ class DEANN:
         optimizer.eta = eta
         pbar = tqdm(range(max_iter))
         for i in pbar:
-            dx = self.gradient(xt, is_train_data=False)
-            xnew = optimizer.update(xt, dx, lasso_penalty=0)
+            if use_kde_grad:
+                dx = self.gradient(xt, is_train_data=False)
+                xnew = optimizer.update(xt, dx, lasso_penalty=0)
+            else:
+                _, indices = self.index.search(xt.astype("float32"), self.k)
+                xnew = []
+                for j in range(indices.shape[0]):
+                    xnew.append(
+                        np.mean(self.X[indices[j, :], :], axis=0).astype("float32")
+                    )
+                xnew = np.vstack(xnew)
 
             # Early stop
             if np.linalg.norm(xnew - xt) / np.linalg.norm(xt) < tol:
@@ -299,8 +313,8 @@ class DEANN:
                 break
             if i % 10 == 0:
                 p = self.percentile(xt)
-                p = np.mean(p)
-                pbar.set_description(f"Ascending - average percentile={p:.2f}")
+                p = np.max(p)
+                pbar.set_description(f"Ascending - max percentile={p:.2f}")
             xt = xnew.copy()
 
         # Merge very close cluster centers
